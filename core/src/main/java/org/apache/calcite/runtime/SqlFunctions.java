@@ -38,6 +38,7 @@ import org.apache.calcite.linq4j.tree.Primitive;
 import org.apache.calcite.rel.type.TimeFrame;
 import org.apache.calcite.rel.type.TimeFrameSet;
 import org.apache.calcite.runtime.FlatLists.ComparableList;
+import org.apache.calcite.runtime.variant.VariantValue;
 import org.apache.calcite.sql.SqlIntervalQualifier;
 import org.apache.calcite.sql.SqlUtil;
 import org.apache.calcite.sql.fun.SqlLibraryOperators;
@@ -124,6 +125,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.TimeZone;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BinaryOperator;
 import java.util.function.Consumer;
@@ -276,12 +278,34 @@ public class SqlFunctions {
     return condition;
   }
 
-  /** SQL TO_BASE64(string) function. */
+  public static String uuidToString(UUID uuid) {
+    return uuid.toString();
+  }
+
+  public static UUID binaryToUuid(ByteString bytes) {
+    if (bytes.length() < 16) {
+      throw new IllegalArgumentException("Need at least 16 bytes for UUID");
+    }
+    ByteBuffer byteBuffer = ByteBuffer.wrap(bytes.getBytes());
+    long mostSignificantBits = byteBuffer.getLong();
+    long leastSignificantBits = byteBuffer.getLong();
+    return new UUID(mostSignificantBits, leastSignificantBits);
+  }
+
+  public static ByteString uuidToBinary(UUID uuid) {
+    byte[] dest = new byte[16];
+    ByteBuffer byteBuffer = ByteBuffer.wrap(dest);
+    byteBuffer.putLong(uuid.getMostSignificantBits());
+    byteBuffer.putLong(uuid.getLeastSignificantBits());
+    return new ByteString(dest);
+  }
+
+  /** SQL TO_BASE64(string)/BASE64(string) function. */
   public static String toBase64(String string) {
     return toBase64_(string.getBytes(UTF_8));
   }
 
-  /** SQL TO_BASE64(string) function for binary string. */
+  /** SQL TO_BASE64(string)/BASE64(string) function for binary string. */
   public static String toBase64(ByteString string) {
     return toBase64_(string.getBytes());
   }
@@ -296,7 +320,7 @@ public class SqlFunctions {
     return str.substring(0, str.length() - 1);
   }
 
-  /** SQL FROM_BASE64(string) function. */
+  /** SQL FROM_BASE64(string)/UNBASE64(string) function. */
   public static @Nullable ByteString fromBase64(String base64) {
     try {
       base64 = FROM_BASE64_REGEXP.matcher(base64).replaceAll("");
@@ -338,6 +362,11 @@ public class SqlFunctions {
   /** SQL TO_HEX(binary) function. */
   public static String toHex(ByteString byteString) {
     return Hex.encodeHexString(byteString.getBytes());
+  }
+
+  /** SQL HEX(varchar) function. */
+  public static String hex(String value) {
+    return Hex.encodeHexString(value.getBytes(UTF_8));
   }
 
   /** SQL MD5(string) function. */
@@ -1680,6 +1709,29 @@ public class SqlFunctions {
     }
   }
 
+  /** Oracle's {@code CONVERT(charValue, destCharsetName[, srcCharsetName])} function,
+   * return null if s is null or empty. */
+  public static String convertOracle(String s, String... args) {
+    final Charset src;
+    final Charset dest;
+    if (args.length == 1) {
+      // srcCharsetName is not specified
+      src = Charset.defaultCharset();
+      dest = SqlUtil.getCharset(args[0]);
+    } else {
+      dest = SqlUtil.getCharset(args[0]);
+      src = SqlUtil.getCharset(args[1]);
+    }
+    byte[] bytes = s.getBytes(src);
+    final CharsetDecoder decoder = dest.newDecoder();
+    final ByteBuffer buffer = ByteBuffer.wrap(bytes);
+    try {
+      return decoder.decode(buffer).toString();
+    } catch (CharacterCodingException ex) {
+      throw RESOURCE.charsetEncoding(s, dest.name()).ex();
+    }
+  }
+
   /** State for {@code PARSE_URL}. */
   @Deterministic
   public static class ParseUrlFunction {
@@ -1771,7 +1823,7 @@ public class SqlFunctions {
   public static String trim(boolean left, boolean right, String seek,
       String s, boolean strict) {
     if (strict && seek.length() != 1) {
-      throw RESOURCE.trimError().ex();
+      throw RESOURCE.trimError(seek).ex();
     }
     int j = s.length();
     if (right) {
@@ -3030,6 +3082,46 @@ public class SqlFunctions {
     return bitsSet;
   }
 
+  /** Helper function for implementing MySQL <code>BIT_COUNT</code>. Counts the number
+   * of bits set in a boolean value. */
+  public static long bitCountMySQL(Boolean b) {
+    return Long.bitCount(b ? 1L : 0L);
+  }
+
+  /** Helper function for implementing MySQL <code>BIT_COUNT</code>. Counts the number
+   * of bits set in a string value. */
+  public static long bitCountMySQL(String b) {
+    try {
+      return bitCount(new BigDecimal(b));
+    } catch (Exception ignore) {
+      return 0;
+    }
+  }
+
+  /** Helper function for implementing MySQL <code>BIT_COUNT</code>. Counts the number
+   * of bits set in a number value. */
+  public static long bitCountMySQL(Number b) {
+    return bitCount(new BigDecimal(b.toString()));
+  }
+
+  /** Helper function for implementing MySQL <code>BIT_COUNT</code>. Counts the number
+   * of bits set in a date value. */
+  public static long bitCountMySQL(java.sql.Date b) {
+    return bitCountMySQL(new SimpleDateFormat("yyyyMMdd", Locale.ENGLISH).format(b));
+  }
+
+  /** Helper function for implementing MySQL <code>BIT_COUNT</code>. Counts the number
+   * of bits set in a time value. */
+  public static long bitCountMySQL(Time b) {
+    return bitCountMySQL(new SimpleDateFormat("HHmmss", Locale.ENGLISH).format(b));
+  }
+
+  /** Helper function for implementing MySQL <code>BIT_COUNT</code>. Counts the number
+   * of bits set in a timestamp value. */
+  public static long bitCountMySQL(Timestamp b) {
+    return bitCountMySQL(new SimpleDateFormat("yyyyMMddHHmmss", Locale.ENGLISH).format(b));
+  }
+
   /** Bitwise function <code>BIT_OR</code> applied to integer values. */
   public static long bitOr(long b0, long b1) {
     return b0 | b1;
@@ -4230,6 +4322,10 @@ public class SqlFunctions {
     return v == null ? castNonNull(null) : toInt(v);
   }
 
+  // Method tagged as non-deterministic because it can throw.
+  // The DeterministicCodeOptimizer may otherwise try to lift it out of try-catch blocks.
+  // See https://issues.apache.org/jira/browse/CALCITE-6753
+  @NonDeterministic
   public static int toInt(String s) {
     return parseInt(s.trim());
   }
@@ -5690,8 +5786,16 @@ public class SqlFunctions {
   }
 
   /** SQL {@code REPLACE(string, search, replacement)} function. */
-  public static String replace(String s, String search, String replacement) {
-    return s.replace(search, replacement);
+  public static String replace(String s, String search, String replacement,
+      boolean isCaseSensitive) {
+    if (search.isEmpty()) {
+      return s;
+    }
+    if (isCaseSensitive) {
+      return s.replace(search, replacement);
+    }
+    // for MSSQL's REPLACE function, search pattern is case-insensitive during matching
+    return org.apache.commons.lang3.StringUtils.replaceIgnoreCase(s, search, replacement);
   }
 
   /** Helper for "array element reference". Caller has already ensured that
@@ -5726,6 +5830,9 @@ public class SqlFunctions {
    * known until runtime.
    */
   public static @Nullable Object item(Object object, Object index) {
+    if (object instanceof VariantValue) {
+      return ((VariantValue) object).item(index);
+    }
     if (object instanceof Map) {
       return mapItem((Map) object, index);
     }

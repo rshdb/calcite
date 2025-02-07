@@ -63,6 +63,7 @@ import org.apache.calcite.rel.logical.LogicalAsofJoin;
 import org.apache.calcite.rel.logical.LogicalFilter;
 import org.apache.calcite.rel.logical.LogicalProject;
 import org.apache.calcite.rel.metadata.RelColumnMapping;
+import org.apache.calcite.rel.metadata.RelMdUtil;
 import org.apache.calcite.rel.metadata.RelMetadataQuery;
 import org.apache.calcite.rel.rules.AggregateRemoveRule;
 import org.apache.calcite.rel.type.RelDataType;
@@ -820,7 +821,7 @@ public class RelBuilder {
    *         b.in(b.field("deptno"),
    *             b2 -> b2.scan("Depts")
    *                 .filter(
-   *                     b2.eq(b2.field("location"), b2.literal("Boston")))
+   *                     b2.equals(b2.field("location"), b2.literal("Boston")))
    *                 .project(b.field("deptno"))
    *                 .build()))
    * }</pre>
@@ -849,7 +850,7 @@ public class RelBuilder {
    *             SqlStdOperatorTable.GREATER_THAN,
    *             b2 -> b2.scan("Emps")
    *                 .filter(
-   *                     b2.eq(b2.field("job"), b2.literal("Manager")))
+   *                     b2.equals(b2.field("job"), b2.literal("Manager")))
    *                 .project(b2.field("sal"))
    *                 .build()))
    * }</pre>
@@ -894,7 +895,7 @@ public class RelBuilder {
    *             SqlStdOperatorTable.GREATER_THAN,
    *             b2 -> b2.scan("Emps")
    *                 .filter(
-   *                     b2.eq(b2.field("job"), b2.literal("Manager")))
+   *                     b2.equals(b2.field("job"), b2.literal("Manager")))
    *                 .project(b2.field("sal"))
    *                 .build()))
    * }</pre>
@@ -931,7 +932,8 @@ public class RelBuilder {
    *         b.exists(b2 ->
    *             b2.scan("Emps")
    *                 .filter(
-   *                     b2.eq(b2.field("job"), b2.literal("Manager")))
+   *                     b2.equals(b2.field("job"), b2.literal("Manager")))
+   *                 .project(b2.literal(1))
    *                 .build()))
    * }</pre>
    *
@@ -955,10 +957,10 @@ public class RelBuilder {
    * <pre>{@code
    * b.scan("Depts")
    *     .filter(
-   *         b.exists(b2 ->
+   *         b.unique(b2 ->
    *             b2.scan("Emps")
    *                 .filter(
-   *                     b2.eq(b2.field("job"), b2.literal("Manager")))
+   *                     b2.equals(b2.field("job"), b2.literal("Manager")))
    *                 .project(b2.field("deptno")
    *                 .build()))
    * }</pre>
@@ -987,7 +989,7 @@ public class RelBuilder {
    *         b.scalarQuery(b2 ->
    *             b2.scan("Emps")
    *                 .aggregate(
-   *                     b2.eq(b2.field("job"), b2.literal("Manager")))
+   *                     b2.groupKey(), b2.max(b2.field("sal")))
    *                 .build()))
    * }</pre>
    *
@@ -1058,7 +1060,7 @@ public class RelBuilder {
    * b.scan("Depts")
    *     .project(
    *         b.field("deptno")
-   *         b.multisetQuery(b2 ->
+   *         b.mapQuery(b2 ->
    *             b2.scan("Emps")
    *                 .project(b2.field("empno"), b2.field("job"))
    *                 .build()))
@@ -2678,10 +2680,9 @@ public class RelBuilder {
       List<RexNode> extraNodes) {
     final RelMetadataQuery mq = peek().getCluster().getMetadataQuery();
     if (aggCallList.isEmpty() && groupSet.isEmpty()) {
-      final Double minRowCount = mq.getMinRowCount(peek());
-      if (minRowCount == null || minRowCount < 1d) {
-        // We can't remove "GROUP BY ()" if there's a chance the rel could be
-        // empty.
+      // We can't remove "GROUP BY ()" if there's a chance the rel could be
+      // empty.
+      if (RelMdUtil.isRelDefinitelyEmpty(mq, peek())) {
         return false;
       }
     }

@@ -50,11 +50,17 @@
   githubId: libenchao
   pronouns: he/him
   org: ByteDance
-  role: PMC Chair
+  role: PMC
 - name: Bertil Chapuis
   apacheId: bchapuis
   githubId: bchapuis
   org: HEIG-VD
+  role: Committer
+- name: Cancai Cai
+  apacheId: cancai
+  githubId: caicancai
+  pronouns: he/him
+  org:
   role: Committer
 - name: Chris Baynes
   apacheId: cbaynes
@@ -280,8 +286,8 @@
 - name: Ruben Quesada Lopez
   apacheId: rubenql
   githubId: rubenada
-  org: TIBCO
-  role: PMC
+  org: Voltron Data
+  role: PMC Chair
 - name: Rui Wang
   apacheId: amaliujia
   githubId: amaliujia

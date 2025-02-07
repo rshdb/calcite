@@ -47,7 +47,6 @@ import org.apache.calcite.linq4j.Linq4j;
 import org.apache.calcite.linq4j.Ord;
 import org.apache.calcite.linq4j.QueryProvider;
 import org.apache.calcite.linq4j.Queryable;
-import org.apache.calcite.linq4j.function.Function0;
 import org.apache.calcite.plan.RelOptPlanner;
 import org.apache.calcite.plan.RelOptUtil;
 import org.apache.calcite.prepare.CalcitePrepareImpl;
@@ -85,6 +84,7 @@ import org.apache.calcite.sql.parser.SqlParser;
 import org.apache.calcite.sql.parser.SqlParserPos;
 import org.apache.calcite.sql.parser.impl.SqlParserImpl;
 import org.apache.calcite.sql.type.SqlTypeName;
+import org.apache.calcite.sql.validate.SqlConformanceEnum;
 import org.apache.calcite.sql2rel.SqlToRelConverter.Config;
 import org.apache.calcite.test.schemata.catchall.CatchallSchema;
 import org.apache.calcite.test.schemata.foodmart.FoodmartSchema;
@@ -902,17 +902,7 @@ public class JdbcTest {
     checkMockDdl(counter, true,
         driver2.withPrepareFactory(() -> new CountingPrepare(counter)));
 
-    // MockDdlDriver2 implements commit if we override its createPrepareFactory
-    // method. The method is deprecated but override still needs to work.
-    checkMockDdl(counter, true,
-        new MockDdlDriver2(counter) {
-          @SuppressWarnings("deprecation")
-          @Override protected Function0<CalcitePrepare> createPrepareFactory() {
-            return () -> new CountingPrepare(counter);
-          }
-        });
-
-    // MockDdlDriver2 implements commit if we override its createPrepareFactory
+    // MockDdlDriver2 implements commit if we override its createPrepare
     // method.
     checkMockDdl(counter, true,
         new MockDdlDriver2(counter) {
@@ -6955,7 +6945,13 @@ public class JdbcTest {
   @Test void testRowComparison() {
     CalciteAssert.that()
         .with(CalciteAssert.Config.JDBC_SCOTT)
-        .query("SELECT empno FROM JDBC_SCOTT.emp WHERE (ename, job) < ('Blake', 'Manager')")
+        // The extra casts are necessary because HSQLDB does not support a ROW type,
+        // and in the absence of these explicit casts the code generated contains
+        // a cast of a ROW value.  The correct way to fix this would be to improve
+        // the code generation for HSQLDB to expand suc casts into constructs
+        // supported by HSQLDB.
+        .query("SELECT empno FROM JDBC_SCOTT.emp WHERE (ename, job) < "
+            + "(CAST('Blake' AS VARCHAR(10)), CAST('Manager' AS VARCHAR(9)))")
         .returnsUnordered("EMPNO=7876", "EMPNO=7499", "EMPNO=7698");
   }
 
@@ -7344,6 +7340,47 @@ public class JdbcTest {
     CalciteAssert.that(CalciteAssert.Config.REGULAR)
         .query("select nvl(\"commission\", -99) as c from \"hr\".\"emps\"")
         .throws_("No match found for function signature NVL(<NUMERIC>, <NUMERIC>)");
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-6730">[CALCITE-6730]
+   * Add CONVERT function(enabled in Oracle library)</a>. */
+  @Test void testConvertOracle() {
+    CalciteAssert.AssertThat withOracle10 =
+        CalciteAssert.hr()
+            .with(SqlConformanceEnum.ORACLE_10);
+    testConvertOracleInternal(withOracle10);
+
+    CalciteAssert.AssertThat withOracle12
+        = withOracle10.with(SqlConformanceEnum.ORACLE_12);
+    testConvertOracleInternal(withOracle12);
+  }
+
+  private void testConvertOracleInternal(CalciteAssert.AssertThat with) {
+    with.query("select \"name\", \"empid\" from \"hr\".\"emps\"\n"
+            + "where convert(\"name\", GBK)=_GBK'Eric'")
+        .returns("name=Eric; empid=200\n");
+    with.query("select \"name\", \"empid\" from \"hr\".\"emps\"\n"
+            + "where _BIG5'Eric'=convert(\"name\", LATIN1)")
+        .throws_("Cannot apply operation '=' to strings with "
+            + "different charsets 'Big5' and 'ISO-8859-1'");
+    // use LATIN1 as dest charset, not BIG5
+    with.query("select \"name\", \"empid\" from \"hr\".\"emps\"\n"
+            + "where _BIG5'Eric'=convert(\"name\", LATIN1, BIG5)")
+        .throws_("Cannot apply operation '=' to strings with "
+            + "different charsets 'Big5' and 'ISO-8859-1'");
+
+    // check cast
+    with.query("select \"name\", \"empid\" from \"hr\".\"emps\"\n"
+            + "where cast(convert(\"name\", LATIN1, UTF8) as varchar)='Eric'")
+        .returns("name=Eric; empid=200\n");
+    // the result of convert(\"name\", GBK) has GBK charset
+    // while CHAR(5) has ISO-8859-1 charset, which is not allowed to cast
+    with.query("select \"name\", \"empid\" from \"hr\".\"emps\"\n"
+            + "where cast(convert(\"name\", GBK) as varchar)='Eric'")
+        .throws_(
+            "cannot convert value of type "
+                + "JavaType(class java.lang.String CHARACTER SET \"GBK\") to type VARCHAR NOT NULL");
   }
 
   @Test void testIf() {

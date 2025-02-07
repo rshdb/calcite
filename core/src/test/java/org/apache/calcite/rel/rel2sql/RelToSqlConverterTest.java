@@ -1740,6 +1740,28 @@ class RelToSqlConverterTest {
   }
 
   /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-6785">[CALCITE-6785]
+   * RelToSqlConverter generate wrong sql when UNNEST has a correlate variable</a>. */
+  @Test void testUnnestWithCorrelate() {
+    final String sql = "SELECT\n"
+        + "    \"department_id\",\n"
+        + "    SPLIT (\"department_description\", ','),\n"
+        + "    UNNESTVALUES AS UNNESTALIAS\n"
+        + "FROM\n"
+        + "    \"foodmart\".\"department\",\n"
+        + "    UNNEST(SPLIT (\"department_description\", ',')) AS UNNESTVALUES";
+
+    final String expected = "SELECT \"$cor0\".\"department_id\", "
+        + "SPLIT(\"$cor0\".\"department_description\", ','), \"t10\".\"col_0\" AS \"UNNESTALIAS\"\n"
+        + "FROM (SELECT \"department_id\", \"department_description\", "
+        + "SPLIT(\"department_description\", ',') AS \"$f2\"\n"
+        + "FROM \"foodmart\".\"department\") AS \"$cor0\",\n"
+        + "LATERAL UNNEST (SELECT \"$cor0\".\"$f2\"\n"
+        + "FROM (VALUES (0)) AS \"t\" (\"ZERO\")) AS \"t10\" (\"col_0\")";
+    sql(sql).withLibrary(SqlLibrary.BIG_QUERY).ok(expected);
+  }
+
+  /** Test case for
    * <a href="https://issues.apache.org/jira/browse/CALCITE-5395">[CALCITE-5395]
    * RelToSql converter fails when SELECT * is under a semi-join node</a>. */
   @Test void testUnionUnderSemiJoinNode() {
@@ -2619,6 +2641,28 @@ class RelToSqlConverterTest {
         + "EXTRACT(HOUR FROM toDateTime('2023-12-01 00:00:00')), "
         + "EXTRACT(MINUTE FROM toDateTime('2023-12-01 00:00:00')), "
         + "EXTRACT(SECOND FROM toDateTime('2023-12-01 00:00:00'))";
+    final String expectedMySQL = "SELECT "
+        + "EXTRACT(YEAR FROM DATE '2023-12-01'), "
+        + "EXTRACT(QUARTER FROM DATE '2023-12-01'), "
+        + "EXTRACT(MONTH FROM DATE '2023-12-01'), "
+        + "EXTRACT(WEEK FROM DATE '2023-12-01'), "
+        + "DAYOFYEAR(DATE '2023-12-01'), "
+        + "EXTRACT(DAY FROM DATE '2023-12-01'), "
+        + "DAYOFWEEK(DATE '2023-12-01'), "
+        + "EXTRACT(HOUR FROM TIMESTAMP '2023-12-01 00:00:00'), "
+        + "EXTRACT(MINUTE FROM TIMESTAMP '2023-12-01 00:00:00'), "
+        + "EXTRACT(SECOND FROM TIMESTAMP '2023-12-01 00:00:00')";
+    final String expectedStarRocks = "SELECT "
+        + "EXTRACT(YEAR FROM DATE '2023-12-01'), "
+        + "EXTRACT(QUARTER FROM DATE '2023-12-01'), "
+        + "EXTRACT(MONTH FROM DATE '2023-12-01'), "
+        + "EXTRACT(WEEK FROM DATE '2023-12-01'), "
+        + "DAYOFYEAR(DATE '2023-12-01'), "
+        + "EXTRACT(DAY FROM DATE '2023-12-01'), "
+        + "DAYOFWEEK(DATE '2023-12-01'), "
+        + "EXTRACT(HOUR FROM DATETIME '2023-12-01 00:00:00'), "
+        + "EXTRACT(MINUTE FROM DATETIME '2023-12-01 00:00:00'), "
+        + "EXTRACT(SECOND FROM DATETIME '2023-12-01 00:00:00')";
     final String expectedHive = "SELECT "
         + "EXTRACT(YEAR FROM DATE '2023-12-01'), "
         + "EXTRACT(QUARTER FROM DATE '2023-12-01'), "
@@ -2656,6 +2700,8 @@ class RelToSqlConverterTest {
         + "FROM (VALUES (0)) AS t (ZERO)";
     sql(sql)
         .withClickHouse().ok(expectedClickHouse)
+        .withMysql().ok(expectedMySQL)
+        .withStarRocks().ok(expectedStarRocks)
         .withHive().ok(expectedHive)
         .withPostgresql().ok(expectedPostgresql)
         .withHsqldb().ok(expectedHsqldb);
@@ -2966,7 +3012,12 @@ class RelToSqlConverterTest {
         + "FROM `foodmart`.`product`\n"
         + "LIMIT 100\n"
         + "OFFSET 10";
+    final String expectedVertica = "SELECT \"product_id\"\n"
+        + "FROM \"foodmart\".\"product\"\n"
+        + "LIMIT 100\n"
+        + "OFFSET 10";
     sql(query).withHive().ok(expected)
+        .withVertica().ok(expectedVertica)
         .withStarRocks().ok(expectedStarRocks);
   }
 
@@ -3745,6 +3796,39 @@ class RelToSqlConverterTest {
     final String expected = "SELECT ROW_NUMBER() OVER (ORDER BY `hire_date`)\n"
             + "FROM `foodmart`.`employee`";
     sql(query).dialect(mySqlDialect(NullCollation.LAST)).ok(expected);
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-6699">[CALCITE-6699]
+   * Invalid unparse for Varchar in StarRocksDialect </a>. */
+  @Test void testStarRocksCastToVarcharWithLessThanMaxPrecision() {
+    final String query = "select cast(\"product_id\" as varchar(50)), \"product_id\" "
+        + "from \"product\" ";
+    final String expected = "SELECT CAST(`product_id` AS VARCHAR(50)), `product_id`\n"
+        + "FROM `foodmart`.`product`";
+    sql(query).withStarRocks().ok(expected);
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-6699">[CALCITE-6699]
+   * Invalid unparse for Varchar in StarRocksDialect </a>. */
+  @Test void testStarRocksCastToVarcharWithGreaterThanMaxPrecision() {
+    final String query = "select cast(\"product_id\" as varchar(150000)), \"product_id\" "
+        + "from \"product\" ";
+    final String expected = "SELECT CAST(`product_id` AS VARCHAR(65533)), `product_id`\n"
+        + "FROM `foodmart`.`product`";
+    sql(query).withStarRocks().ok(expected);
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-6699">[CALCITE-6699]
+   * Invalid unparse for Varchar in StarRocksDialect </a>. */
+  @Test void testStarRocksCastToVarcharWithDefaultPrecision() {
+    final String query = "select cast(\"product_id\" as varchar), \"product_id\" "
+        + "from \"product\" ";
+    final String expected = "SELECT CAST(`product_id` AS VARCHAR), `product_id`\n"
+        + "FROM `foodmart`.`product`";
+    sql(query).withStarRocks().ok(expected);
   }
 
   /** Test case for
@@ -7904,6 +7988,32 @@ class RelToSqlConverterTest {
   }
 
   /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-6756">[CALCITE-6756]
+   * Preserving CAST of STRING operand in binary comparison for PostgreSQL</a>. */
+  @Test void testImplicitTypeCoercionPostgreSQL() {
+    final String query = "select \"employee_id\" "
+        + "from \"foodmart\".\"employee\" "
+        + "where 10 = cast(\"full_name\" as int) and "
+        + "  \"first_name\" > cast(10 as varchar) and "
+        + "\"birth_date\" = cast('1914-02-02' as date) or "
+        + "\"hire_date\" = cast('1996-01-01 '||'00:00:00' as timestamp) or "
+        + "\"hire_date\" = '1996-01-01 00:00:00' or "
+        + "cast(\"full_name\" as timestamp) = \"hire_date\" or "
+        + "cast('10' as varchar) = 1";
+    final String expectedPostgresql = "SELECT \"employee_id\"\n"
+        + "FROM \"foodmart\".\"employee\"\n"
+        + "WHERE 10 = CAST(\"full_name\" AS INTEGER) AND "
+        + "\"first_name\" > CAST(10 AS VARCHAR) AND "
+        + "\"birth_date\" = '1914-02-02' OR "
+        + "\"hire_date\" = CAST('1996-01-01 ' || '00:00:00' AS TIMESTAMP(0)) OR "
+        + "\"hire_date\" = '1996-01-01 00:00:00' OR "
+        + "CAST(\"full_name\" AS TIMESTAMP(0)) = \"hire_date\" OR "
+        + "CAST('10' AS INTEGER) = 1";
+    sql(query)
+        .withPostgresql().ok(expectedPostgresql);
+  }
+
+  /** Test case for
    * <a href="https://issues.apache.org/jira/browse/CALCITE-6149">[CALCITE-6149]
    * Unparse for CAST Nullable with ClickHouseSqlDialect</a>. */
   @Test void testCastToNullableInClickhouse() {
@@ -7916,6 +8026,27 @@ class RelToSqlConverterTest {
         + "FROM `foodmart`.`product`";
 
     sql(query).withClickHouse().ok(expectedSql);
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-6762">[CALCITE-6762]
+   * Preserving the CAST conversion for operands in Presto</a>. */
+  @Test void testImplicitTypeCoercion() {
+    final String query = "select \"employee_id\" "
+        + "from \"foodmart\".\"employee\" "
+        + "where 10 = cast('10' as int) and \"birth_date\" = cast('1914-02-02' as date) or "
+        + "\"hire_date\" = cast('1996-01-01 '||'00:00:00' as timestamp)";
+    final String expected = "SELECT \"employee_id\"\n"
+        + "FROM \"foodmart\".\"employee\"\n"
+        + "WHERE 10 = '10' AND \"birth_date\" = '1914-02-02' OR \"hire_date\" = '1996-01-01 ' || "
+        + "'00:00:00'";
+    final String expectedPresto = "SELECT \"employee_id\"\n"
+        + "FROM \"foodmart\".\"employee\"\n"
+        + "WHERE 10 = CAST('10' AS INTEGER) AND \"birth_date\" = CAST('1914-02-02' AS DATE) OR "
+        + "\"hire_date\" = CAST('1996-01-01 ' || '00:00:00' AS TIMESTAMP)";
+    sql(query)
+        .ok(expected)
+        .withPresto().ok(expectedPresto);
   }
 
   @Test void testDialectQuoteStringLiteral() {
@@ -8616,6 +8747,28 @@ class RelToSqlConverterTest {
         .withSpark().ok(sparkExpected);
   }
 
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-6748">[CALCITE-6748]
+   * RelToSqlConverter returns the wrong result when Aggregate is on Sort</a>. */
+  @Test void testAggregateOnSort() {
+    final String query0 = "select max(\"product_class_id\") "
+        + "from (select * from \"product\" order by \"brand_name\" asc limit 10) t";
+    final String expected0 = "SELECT MAX(\"product_class_id\")\n"
+        + "FROM (SELECT \"product_class_id\"\n"
+        + "FROM \"foodmart\".\"product\"\n"
+        + "ORDER BY \"brand_name\"\n"
+        + "FETCH NEXT 10 ROWS ONLY) AS \"t1\"";
+    sql(query0).ok(expected0);
+
+    final String query1 = "select max(\"product_class_id\") "
+        + "from (select * from \"product\" offset 10 ) t";
+    final String expected1 = "SELECT MAX(\"product_class_id\")\n"
+        + "FROM (SELECT \"product_class_id\"\n"
+        + "FROM \"foodmart\".\"product\"\n"
+        + "OFFSET 10 ROWS) AS \"t1\"";
+    sql(query1).ok(expected1);
+  }
+
   @Test void testNullCollationAscNullFirst() {
     final String query = "select * from \"product\" order by \"brand_name\" asc nulls first";
     final String expected = "SELECT *\n"
@@ -8991,6 +9144,31 @@ class RelToSqlConverterTest {
         + "ELSE 0.0000 END)\n"
         + "FROM \"foodmart\".\"employee\"";
     sql(query).withOracle().ok(oracle);
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-6796">[CALCITE-6796]
+   * Convert Type from BINARY to VARBINARY in PrestoDialect</a>. */
+  @Test void testPrestoBinaryCast() {
+    String query = "SELECT cast(cast(\"employee_id\" as varchar) as binary)"
+        + "from \"foodmart\".\"reserve_employee\" ";
+    String expected = "SELECT CAST(CAST(\"employee_id\" AS VARCHAR) AS VARBINARY)"
+        + "\nFROM \"foodmart\".\"reserve_employee\"";
+    sql(query).withPresto().ok(expected);
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-6771">[CALCITE-6771]
+   * Convert Type from FLOAT to DOUBLE in PrestoDialect</a>. */
+  @Test void testPrestoFloatingPointTypesCast() {
+    String query = "SELECT CAST(\"department_id\" AS float), "
+        + "CAST(\"department_id\" AS double), "
+        + "CAST(\"department_id\" AS real) FROM \"employee\"";
+    String expected = "SELECT CAST(\"department_id\" AS DOUBLE), "
+        + "CAST(\"department_id\" AS DOUBLE), "
+        + "CAST(\"department_id\" AS REAL)\nFROM \"foodmart\".\"employee\"";
+    sql(query)
+        .withPresto().ok(expected);
   }
 
   /** Fluid interface to run tests. */

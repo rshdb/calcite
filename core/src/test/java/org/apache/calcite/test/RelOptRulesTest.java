@@ -347,6 +347,22 @@ class RelOptRulesTest extends RelOptTestBase {
   }
 
   /**
+   * Test case for <a href="https://issues.apache.org/jira/projects/CALCITE/issues/CALCITE-6746">
+   * [CALCITE-6746] Optimization rule ProjectWindowTranspose is unsound</a>. */
+  @Test void testConstantWindow() {
+    final String sql = "with empsalary(dept, empno, salary, enroll_date) as "
+        + "(VALUES ('x', 10, 5200, DATE '2007-08-01'), (NULL, NULL, NULL, NULL))\n"
+        + "select sum(salary) "
+        + "OVER (order by enroll_date range between INTERVAL 365 DAYS preceding and "
+        + "INTERVAL 365 DAYS following),\n"
+        + "salary, enroll_date FROM empsalary";
+    sql(sql)
+        .withPreRule(CoreRules.PROJECT_TO_LOGICAL_PROJECT_AND_WINDOW)
+        .withRule(CoreRules.PROJECT_WINDOW_TRANSPOSE)
+        .checkUnchanged();
+  }
+
+  /**
    * Test case for
    * <a href="https://issues.apache.org/jira/browse/CALCITE-5813">[CALCITE-5813]
    * Type inference for sql functions REPEAT, SPACE, XML_TRANSFORM,
@@ -5854,6 +5870,7 @@ class RelOptRulesTest extends RelOptTestBase {
         + "where deptno is not distinct from 10";
     sql(sql).withPre(getTransitiveProgram())
         .withRule(CoreRules.JOIN_PUSH_TRANSITIVE_PREDICATES,
+            CoreRules.FILTER_REDUCE_EXPRESSIONS,
             CoreRules.PROJECT_REDUCE_EXPRESSIONS)
         .check();
   }
@@ -5864,6 +5881,7 @@ class RelOptRulesTest extends RelOptTestBase {
         + "where mgr is not distinct from null";
     sql(sql).withPre(getTransitiveProgram())
         .withRule(CoreRules.JOIN_PUSH_TRANSITIVE_PREDICATES,
+            CoreRules.FILTER_REDUCE_EXPRESSIONS,
             CoreRules.PROJECT_REDUCE_EXPRESSIONS)
         .check();
   }
@@ -5905,6 +5923,31 @@ class RelOptRulesTest extends RelOptTestBase {
     sql(sql).withPre(getTransitiveProgram())
         .withRule(CoreRules.JOIN_PUSH_TRANSITIVE_PREDICATES,
             CoreRules.FILTER_REDUCE_EXPRESSIONS)
+        .check();
+  }
+
+  @Test void testPullUpPredicatesFromUnionWithProject() {
+    final String sql = "select empno = null from emp where comm = 2\n"
+        + "union all\n"
+        + "select comm = 2 from emp where comm = 2";
+    sql(sql).withPre(getTransitiveProgram())
+        .withRule(CoreRules.FILTER_REDUCE_EXPRESSIONS,
+            CoreRules.PROJECT_REDUCE_EXPRESSIONS)
+          .check();
+  }
+
+  @Test void testPullUpPredicatesFromProject1() {
+    final String sql = "select comm <> 2, comm = 2 from emp where comm = 2";
+    sql(sql).withPre(getTransitiveProgram())
+        .withRule(CoreRules.PROJECT_REDUCE_EXPRESSIONS)
+        .check();
+  }
+
+  @Test void testPullUpPredicatesFromProject2() {
+    final String sql = "select comm = 2, empno <> 1 from emp where comm = 2 and empno = 1";
+    sql(sql).withPre(getTransitiveProgram())
+        .withRule(CoreRules.FILTER_REDUCE_EXPRESSIONS,
+            CoreRules.PROJECT_REDUCE_EXPRESSIONS)
         .check();
   }
 
@@ -9074,6 +9117,16 @@ class RelOptRulesTest extends RelOptTestBase {
   }
 
   /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-2295">[CALCITE-2295]
+   * Correlated SubQuery with Project will generate error plan</a>. */
+  @Test public void testDecorrelationWithProject() throws Exception {
+    final String sql = "select sal,\n"
+        + "exists (select * from emp_b where emp.deptno = emp_b.deptno)\n"
+        + "from sales.emp";
+    sql(sql).withSubQueryRules().withLateDecorrelate(true).check();
+  }
+
+  /** Test case for
    * <a href="https://issues.apache.org/jira/browse/CALCITE-3296">[CALCITE-3296]
    * Decorrelator gives empty result after decorrelating sort rel with
    * null offset and fetch</a>.
@@ -9480,4 +9533,17 @@ class RelOptRulesTest extends RelOptTestBase {
         .check();
   }
 
+  @Test void testLoptOptimizeJoinRulePrioritizeSelfJoin() {
+    HepProgram program = new HepProgramBuilder()
+        .addMatchOrder(HepMatchOrder.BOTTOM_UP)
+        .addRuleInstance(CoreRules.JOIN_TO_MULTI_JOIN)
+        .build();
+
+    sql("select e.empno from emp e"
+        + " inner join dept d on d.deptno = e.deptno"
+        + " inner join emp e2 on e.empno = e2.empno")
+        .withPre(program)
+        .withRule(CoreRules.MULTI_JOIN_OPTIMIZE)
+        .check();
+  }
 }
